@@ -1,175 +1,99 @@
 import os
-import sys
 import time
+import csv
 import requests
-import pandas as pd
-from io import StringIO
 
-# =========================
-# VARIABLES RAILWAY
-# =========================
+SHOP = os.getenv("SHOPIFY_SHOP")
+TOKEN = os.getenv("SHOPIFY_TOKEN")
+CSV_URL = os.getenv("DREAMLOVE_CSV_URL")
+TAG = os.getenv("PRODUCT_TAG")
+INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))
 
-SHOP_DOMAIN = os.getenv("SHOP_DOMAIN")  # ex: adopt1toy.myshopify.com
-SHOPIFY_ACCESS_TOKEN = os.getenv("SHOPIFY_ACCESS_TOKEN")
-SHOPIFY_LOCATION_ID = os.getenv("SHOPIFY_LOCATION_ID")
-
-DREAMLOVE_STOCK_URL = os.getenv("DREAMLOVE_STOCK_URL")
-DREAMLOVE_SKU_COLUMN = os.getenv("DREAMLOVE_SKU_COLUMN", "sku")
-DREAMLOVE_STOCK_COLUMN = os.getenv("DREAMLOVE_STOCK_COLUMN", "stock")
-
-MANUAL_TAG = os.getenv("MANUAL_TAG", "Manuel")
-API_VERSION = "2024-01"
-
-# =========================
-# SÉCURITÉ CONFIG
-# =========================
-
-if not all([
-    SHOP_DOMAIN,
-    SHOPIFY_ACCESS_TOKEN,
-    SHOPIFY_LOCATION_ID,
-    DREAMLOVE_STOCK_URL,
-]):
-    print("❌ Variables Railway manquantes")
-    sys.exit(1)
-
-# =========================
-# SESSION SHOPIFY
-# =========================
-
-session = requests.Session()
-session.headers.update({
-    "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-})
-
-# =========================
-# LECTURE STOCK DREAMLOVE
-# =========================
+HEADERS = {
+    "X-Shopify-Access-Token": TOKEN,
+    "Content-Type": "application/json"
+}
 
 def fetch_dreamlove_stock():
-    print("🔄 Téléchargement du CSV Dreamlove...")
-
-    r = requests.get(DREAMLOVE_STOCK_URL, timeout=60)
-    r.raise_for_status()
-
-    try:
-        df = pd.read_csv(StringIO(r.text), dtype=str)
-    except:
-        df = pd.read_csv(StringIO(r.text), dtype=str, sep=";")
-
-    if DREAMLOVE_SKU_COLUMN not in df.columns:
-        print("❌ Colonne SKU introuvable :", df.columns)
-        sys.exit(1)
-
-    if DREAMLOVE_STOCK_COLUMN not in df.columns:
-        print("❌ Colonne STOCK introuvable :", df.columns)
-        sys.exit(1)
-
-    df[DREAMLOVE_SKU_COLUMN] = df[DREAMLOVE_SKU_COLUMN].astype(str).str.strip()
-    df[DREAMLOVE_STOCK_COLUMN] = df[DREAMLOVE_STOCK_COLUMN].astype(str).str.strip()
+    print("🔄 Téléchargement du stock Dreamlove...")
+    r = requests.get(CSV_URL)
+    r.encoding = "utf-8"
+    lines = r.text.splitlines()
+    reader = csv.DictReader(lines)
 
     stock_map = {}
+    for row in reader:
+        sku = row.get("sku") or row.get("SKU")
+        qty = row.get("stock") or row.get("quantity") or row.get("qty")
+        if sku and qty:
+            try:
+                stock_map[sku.strip()] = int(float(qty))
+            except:
+                pass
 
-    for _, row in df.iterrows():
-        sku = row[DREAMLOVE_SKU_COLUMN]
-
-        try:
-            qty = int(float(row[DREAMLOVE_STOCK_COLUMN].replace(",", ".")))
-        except:
-            qty = 0
-
-        stock_map[sku] = qty
-
-    print(f"✅ {len(stock_map)} SKU chargés depuis Dreamlove")
+    print(f"✅ {len(stock_map)} SKU trouvés dans le stock Dreamlove")
     return stock_map
 
-# =========================
-# RÉCUPÉRATION PRODUITS TAGUÉS MANUEL
-# =========================
 
-def get_manual_products():
-    print("🔎 Récupération des produits tagués Manuel...")
+def fetch_manual_products():
+    print("🔍 Récupération des produits TAG =", TAG)
     products = []
-
-    url = f"https://{SHOP_DOMAIN}/admin/api/{API_VERSION}/products.json?limit=250"
+    url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
 
     while url:
-        r = session.get(url, timeout=30)
-        r.raise_for_status()
+        r = requests.get(url, headers=HEADERS)
         data = r.json()
+        products.extend(data.get("products", []))
+        url = r.links.get("next", {}).get("url")
 
-        for product in data.get("products", []):
-            tags = [t.strip() for t in product.get("tags", "").split(",")]
-            if MANUAL_TAG in tags:
-                products.append(product)
-
-        link = r.headers.get("Link")
-        if link and 'rel="next"' in link:
-            url = link.split(";")[0].strip("<>")
-        else:
-            url = None
-
-    print(f"✅ {len(products)} produits MANUELS trouvés")
+    print(f"✅ {len(products)} produits manuels détectés")
     return products
 
-# =========================
-# MISE À JOUR DU STOCK
-# =========================
 
-def set_stock(inventory_item_id, qty):
-    url = f"https://{SHOP_DOMAIN}/admin/api/{API_VERSION}/inventory_levels/set.json"
+def update_stock(variant_id, inventory_item_id, new_stock):
+    # 1. Récupérer location_id
+    r = requests.get(f"https://{SHOP}/admin/api/2024-07/locations.json", headers=HEADERS)
+    location_id = r.json()["locations"][0]["id"]
 
+    # 2. Mise à jour du stock
     payload = {
-        "location_id": int(SHOPIFY_LOCATION_ID),
-        "inventory_item_id": int(inventory_item_id),
-        "available": int(qty),
+        "location_id": location_id,
+        "inventory_item_id": inventory_item_id,
+        "available": new_stock
     }
 
-    r = session.post(url, json=payload, timeout=20)
+    r = requests.post(
+        f"https://{SHOP}/admin/api/2024-07/inventory_levels/set.json",
+        headers=HEADERS,
+        json=payload
+    )
 
-    if r.status_code >= 400:
-        print("⚠️ Erreur MAJ stock :", r.text)
+    if r.status_code == 200:
+        print(f"✅ Stock mis à jour → {new_stock}")
+    else:
+        print("❌ Erreur mise à jour stock :", r.text)
 
-# =========================
-# MAIN
-# =========================
 
-def main():
-    print("=== DÉMARRAGE SYNC STOCK MANUEL DREAMLOVE ===")
-
-    stock_map = fetch_dreamlove_stock()
-    products = get_manual_products()
-
-    updated = 0
-    skipped = 0
+def sync():
+    dreamlove_stock = fetch_dreamlove_stock()
+    products = fetch_manual_products()
 
     for product in products:
         for variant in product["variants"]:
-            sku = (variant.get("sku") or "").strip()
+            sku = variant.get("sku")
+            if sku in dreamlove_stock:
+                new_stock = dreamlove_stock[sku]
+                inventory_item_id = variant["inventory_item_id"]
+                print(f"🔁 {sku} → {new_stock}")
+                update_stock(variant["id"], inventory_item_id, new_stock)
 
-            if not sku:
-                continue
 
-            if sku not in stock_map:
-                skipped += 1
-                continue
+print("🚀 SYNCHRO STOCK MANUELLE DÉMARRÉE")
+while True:
+    try:
+        sync()
+    except Exception as e:
+        print("❌ ERREUR GLOBALE :", str(e))
 
-            qty = stock_map[sku]
-            inventory_item_id = variant["inventory_item_id"]
-
-            set_stock(inventory_item_id, qty)
-            print(f"✅ {sku} → {qty}")
-
-            updated += 1
-            time.sleep(0.15)  # anti-blocage API Shopify
-
-    print("✅ SYNC TERMINÉE")
-    print(f"🔁 Variantes mises à jour : {updated}")
-    print(f"❌ SKU non trouvés : {skipped}")
-
-# =========================
-
-if __name__ == "__main__":
-    main()
+    print(f"⏳ Attente {INTERVAL} secondes...\n")
+    time.sleep(INTERVAL)
