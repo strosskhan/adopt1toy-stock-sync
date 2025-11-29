@@ -3,10 +3,10 @@ import time
 import csv
 import requests
 
-SHOP = os.getenv("SHOPIFY_SHOP")
-TOKEN = os.getenv("SHOPIFY_TOKEN")
-CSV_URL = os.getenv("DREAMLOVE_CSV_URL")
-TAG = os.getenv("PRODUCT_TAG")
+SHOP = os.getenv("SHOPIFY_SHOP", "").strip()
+TOKEN = os.getenv("SHOPIFY_TOKEN", "").strip()
+CSV_URL = os.getenv("DREAMLOVE_CSV_URL", "").strip()
+TAG = os.getenv("PRODUCT_TAG", "").strip()
 INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))
 
 HEADERS = {
@@ -14,10 +14,19 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+def safe_sleep():
+    print(f"⏳ Attente {INTERVAL} secondes...\n")
+    time.sleep(INTERVAL)
+
 def fetch_dreamlove_stock():
+    if not CSV_URL:
+        print("❌ CSV_URL MANQUANT")
+        return {}
+
     print("🔄 Téléchargement du stock Dreamlove...")
     r = requests.get(CSV_URL, timeout=30)
     r.encoding = "utf-8"
+
     lines = r.text.splitlines()
     reader = csv.DictReader(lines)
 
@@ -38,13 +47,19 @@ def fetch_dreamlove_stock():
 
 
 def fetch_manual_products():
+    if not SHOP or not TOKEN:
+        print("❌ SHOPIFY SHOP OU TOKEN MANQUANT")
+        return []
+
     print("🔍 Recherche produits avec le tag :", TAG)
+
     products = []
     url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
 
     while url:
         r = requests.get(url, headers=HEADERS, timeout=30)
         data = r.json()
+
         products.extend(data.get("products", []))
         url = r.links.get("next", {}).get("url")
 
@@ -53,25 +68,29 @@ def fetch_manual_products():
 
 
 def update_stock(inventory_item_id, new_stock):
-    r = requests.get(f"https://{SHOP}/admin/api/2024-07/locations.json", headers=HEADERS)
-    location_id = r.json()["locations"][0]["id"]
+    try:
+        r = requests.get(f"https://{SHOP}/admin/api/2024-07/locations.json", headers=HEADERS)
+        location_id = r.json()["locations"][0]["id"]
 
-    payload = {
-        "location_id": location_id,
-        "inventory_item_id": inventory_item_id,
-        "available": new_stock
-    }
+        payload = {
+            "location_id": location_id,
+            "inventory_item_id": inventory_item_id,
+            "available": new_stock
+        }
 
-    r = requests.post(
-        f"https://{SHOP}/admin/api/2024-07/inventory_levels/set.json",
-        headers=HEADERS,
-        json=payload
-    )
+        r = requests.post(
+            f"https://{SHOP}/admin/api/2024-07/inventory_levels/set.json",
+            headers=HEADERS,
+            json=payload
+        )
 
-    if r.status_code == 200:
-        print(f"✅ Stock mis à jour → {new_stock}")
-    else:
-        print("❌ Erreur update :", r.text)
+        if r.status_code == 200:
+            print(f"✅ Stock mis à jour → {new_stock}")
+        else:
+            print("❌ Erreur update :", r.text)
+
+    except Exception as e:
+        print("❌ ERREUR UPDATE STOCK :", str(e))
 
 
 def sync():
@@ -91,15 +110,13 @@ def sync():
                 update_stock(inventory_item_id, new_stock)
 
 
-# ✅ PROTECTION ANTI BOUCLE RAILWAY
-if __name__ == "__main__":
-    print("🟢 SERVICE STOCK MANUEL ACTIF")
+# ✅ BOUCLE SERVEUR INCASSABLE
+print("🟢 SERVICE STOCK MANUEL ACTIF")
 
-    while True:
-        try:
-            sync()
-        except Exception as e:
-            print("❌ ERREUR GLOBALE :", str(e))
+while True:
+    try:
+        sync()
+    except Exception as e:
+        print("❌ ERREUR GLOBALE :", str(e))
 
-        print(f"⏳ Attente {INTERVAL} secondes...\n")
-        time.sleep(INTERVAL)
+    safe_sleep()
