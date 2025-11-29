@@ -1,28 +1,22 @@
 import os
 import time
 import csv
-import threading
 import requests
-from flask import Flask
 
-# === CONFIG VIA VARIABLES RAILWAY ===
 SHOP = os.getenv("SHOPIFY_SHOP")
 TOKEN = os.getenv("SHOPIFY_TOKEN")
 CSV_URL = os.getenv("DREAMLOVE_CSV_URL")
 TAG = os.getenv("PRODUCT_TAG")
-INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))  # 30 min par défaut
+INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))
 
 HEADERS = {
     "X-Shopify-Access-Token": TOKEN,
     "Content-Type": "application/json"
 }
 
-app = Flask(__name__)
-
-# === RÉCUPÉRATION DU STOCK DREAMLOVE ===
 def fetch_dreamlove_stock():
     print("🔄 Téléchargement du stock Dreamlove...")
-    r = requests.get(CSV_URL, timeout=60)
+    r = requests.get(CSV_URL, timeout=30)
     r.encoding = "utf-8"
     lines = r.text.splitlines()
     reader = csv.DictReader(lines)
@@ -37,18 +31,17 @@ def fetch_dreamlove_stock():
             except:
                 pass
 
-    print(f"✅ {len(stock_map)} SKU trouvés dans Dreamlove")
+    print(f"✅ {len(stock_map)} SKU trouvés dans le stock Dreamlove")
     return stock_map
 
 
-# === RÉCUPÉRATION DES PRODUITS MANUELS ===
 def fetch_manual_products():
-    print("🔍 Recherche des produits avec le tag :", TAG)
+    print("🔍 Récupération des produits avec le tag :", TAG)
     products = []
     url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
 
     while url:
-        r = requests.get(url, headers=HEADERS, timeout=60)
+        r = requests.get(url, headers=HEADERS)
         data = r.json()
         products.extend(data.get("products", []))
         url = r.links.get("next", {}).get("url")
@@ -57,7 +50,6 @@ def fetch_manual_products():
     return products
 
 
-# === MISE À JOUR DU STOCK SHOPIFY ===
 def update_stock(inventory_item_id, new_stock):
     r = requests.get(f"https://{SHOP}/admin/api/2024-07/locations.json", headers=HEADERS)
     location_id = r.json()["locations"][0]["id"]
@@ -77,10 +69,9 @@ def update_stock(inventory_item_id, new_stock):
     if r.status_code == 200:
         print(f"✅ Stock mis à jour → {new_stock}")
     else:
-        print("❌ Erreur stock :", r.text)
+        print("❌ Erreur mise à jour stock :", r.text)
 
 
-# === SYNCHRO COMPLÈTE ===
 def sync():
     print("🚀 SYNCHRO STOCK MANUELLE DÉMARRÉE")
     dreamlove_stock = fetch_dreamlove_stock()
@@ -95,31 +86,12 @@ def sync():
                 print(f"🔁 {sku} → {new_stock}")
                 update_stock(inventory_item_id, new_stock)
 
-    print("✅ SYNCHRO TERMINÉE\n")
 
+while True:
+    try:
+        sync()
+    except Exception as e:
+        print("❌ ERREUR GLOBALE :", str(e))
 
-# === BOUCLE AUTO EN ARRIÈRE-PLAN ===
-def auto_sync_loop():
-    while True:
-        try:
-            sync()
-        except Exception as e:
-            print("❌ ERREUR GLOBALE :", str(e))
-
-        print(f"⏳ Prochaine synchro dans {INTERVAL} secondes...\n")
-        time.sleep(INTERVAL)
-
-
-# === FLASK POUR GARDER RAILWAY ACTIF ===
-@app.route("/")
-def home():
-    return "Stock sync actif ✅"
-
-
-# === LANCEMENT PROPRE ===
-if __name__ == "__main__":
-    thread = threading.Thread(target=auto_sync_loop)
-    thread.daemon = True
-    thread.start()
-
-    app.run(host="0.0.0.0", port=8080)
+    print(f"⏳ Attente {INTERVAL} secondes...\n")
+    time.sleep(INTERVAL)
