@@ -14,16 +14,13 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def safe_sleep():
-    print(f"⏳ Attente {INTERVAL} secondes...\n")
-    time.sleep(INTERVAL)
-
 def fetch_dreamlove_stock():
+    print("📥 Téléchargement du stock Dreamlove...")
+
     if not CSV_URL:
         print("❌ CSV_URL MANQUANT")
         return {}
 
-    print("🔄 Téléchargement du stock Dreamlove...")
     r = requests.get(CSV_URL, timeout=30)
     r.encoding = "utf-8"
 
@@ -31,7 +28,6 @@ def fetch_dreamlove_stock():
     reader = csv.DictReader(lines)
 
     stock_map = {}
-
     for row in reader:
         sku = row.get("sku") or row.get("SKU")
         qty = row.get("stock") or row.get("quantity") or row.get("qty")
@@ -42,16 +38,16 @@ def fetch_dreamlove_stock():
             except:
                 pass
 
-    print(f"✅ {len(stock_map)} SKU trouvés")
+    print(f"✅ {len(stock_map)} SKU trouvés dans Dreamlove")
     return stock_map
 
 
 def fetch_manual_products():
-    if not SHOP or not TOKEN:
-        print("❌ SHOPIFY SHOP OU TOKEN MANQUANT")
-        return []
+    print("🔍 Recherche des produits avec le tag :", TAG)
 
-    print("🔍 Recherche produits avec le tag :", TAG)
+    if not SHOP or not TOKEN:
+        print("❌ SHOP ou TOKEN manquant")
+        return []
 
     products = []
     url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
@@ -59,7 +55,6 @@ def fetch_manual_products():
     while url:
         r = requests.get(url, headers=HEADERS, timeout=30)
         data = r.json()
-
         products.extend(data.get("products", []))
         url = r.links.get("next", {}).get("url")
 
@@ -87,14 +82,15 @@ def update_stock(inventory_item_id, new_stock):
         if r.status_code == 200:
             print(f"✅ Stock mis à jour → {new_stock}")
         else:
-            print("❌ Erreur update :", r.text)
+            print("❌ Erreur Shopify :", r.text)
 
     except Exception as e:
-        print("❌ ERREUR UPDATE STOCK :", str(e))
+        print("❌ ERREUR UPDATE :", str(e))
 
 
 def sync():
     print("🚀 LANCEMENT SYNCHRO")
+
     dreamlove_stock = fetch_dreamlove_stock()
     products = fetch_manual_products()
 
@@ -110,7 +106,7 @@ def sync():
                 update_stock(inventory_item_id, new_stock)
 
 
-# ✅ BOUCLE SERVEUR INCASSABLE
+# ✅ PROCESS TOUJOURS VIVANT POUR RAILWAY
 print("🟢 SERVICE STOCK MANUEL ACTIF")
 
 while True:
@@ -119,4 +115,5 @@ while True:
     except Exception as e:
         print("❌ ERREUR GLOBALE :", str(e))
 
-    safe_sleep()
+    print(f"⏳ Attente {INTERVAL} secondes...\n")
+    time.sleep(INTERVAL)
