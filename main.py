@@ -1,19 +1,16 @@
 import os
 import time
 import csv
-import requests
 import threading
+import requests
 from flask import Flask
 
-# -------------------------------
-# CONFIG
-# -------------------------------
+# === CONFIG VIA VARIABLES RAILWAY ===
 SHOP = os.getenv("SHOPIFY_SHOP")
 TOKEN = os.getenv("SHOPIFY_TOKEN")
 CSV_URL = os.getenv("DREAMLOVE_CSV_URL")
 TAG = os.getenv("PRODUCT_TAG")
-INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))
-PORT = int(os.getenv("PORT", "8080"))
+INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))  # 30 min par défaut
 
 HEADERS = {
     "X-Shopify-Access-Token": TOKEN,
@@ -22,14 +19,7 @@ HEADERS = {
 
 app = Flask(__name__)
 
-@app.route("/")
-def home():
-    return "✅ Adopt1Toy Stock Sync is running"
-
-# -------------------------------
-# FONCTIONS
-# -------------------------------
-
+# === RÉCUPÉRATION DU STOCK DREAMLOVE ===
 def fetch_dreamlove_stock():
     print("🔄 Téléchargement du stock Dreamlove...")
     r = requests.get(CSV_URL, timeout=60)
@@ -38,28 +28,27 @@ def fetch_dreamlove_stock():
     reader = csv.DictReader(lines)
 
     stock_map = {}
-
     for row in reader:
         sku = row.get("sku") or row.get("SKU")
         qty = row.get("stock") or row.get("quantity") or row.get("qty")
-
         if sku and qty:
             try:
                 stock_map[sku.strip()] = int(float(qty))
             except:
                 pass
 
-    print(f"✅ {len(stock_map)} SKU trouvés dans le stock Dreamlove")
+    print(f"✅ {len(stock_map)} SKU trouvés dans Dreamlove")
     return stock_map
 
 
+# === RÉCUPÉRATION DES PRODUITS MANUELS ===
 def fetch_manual_products():
-    print("🔍 Récupération des produits avec le tag :", TAG)
+    print("🔍 Recherche des produits avec le tag :", TAG)
     products = []
     url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
 
     while url:
-        r = requests.get(url, headers=HEADERS)
+        r = requests.get(url, headers=HEADERS, timeout=60)
         data = r.json()
         products.extend(data.get("products", []))
         url = r.links.get("next", {}).get("url")
@@ -68,15 +57,11 @@ def fetch_manual_products():
     return products
 
 
-def get_location_id():
-    r = requests.get(
-        f"https://{SHOP}/admin/api/2024-07/locations.json",
-        headers=HEADERS
-    )
-    return r.json()["locations"][0]["id"]
+# === MISE À JOUR DU STOCK SHOPIFY ===
+def update_stock(inventory_item_id, new_stock):
+    r = requests.get(f"https://{SHOP}/admin/api/2024-07/locations.json", headers=HEADERS)
+    location_id = r.json()["locations"][0]["id"]
 
-
-def update_stock(inventory_item_id, new_stock, location_id):
     payload = {
         "location_id": location_id,
         "inventory_item_id": inventory_item_id,
@@ -92,38 +77,49 @@ def update_stock(inventory_item_id, new_stock, location_id):
     if r.status_code == 200:
         print(f"✅ Stock mis à jour → {new_stock}")
     else:
-        print("❌ Erreur mise à jour stock :", r.text)
+        print("❌ Erreur stock :", r.text)
 
 
-def sync_loop():
+# === SYNCHRO COMPLÈTE ===
+def sync():
     print("🚀 SYNCHRO STOCK MANUELLE DÉMARRÉE")
+    dreamlove_stock = fetch_dreamlove_stock()
+    products = fetch_manual_products()
 
+    for product in products:
+        for variant in product["variants"]:
+            sku = variant.get("sku")
+            if sku in dreamlove_stock:
+                new_stock = dreamlove_stock[sku]
+                inventory_item_id = variant["inventory_item_id"]
+                print(f"🔁 {sku} → {new_stock}")
+                update_stock(inventory_item_id, new_stock)
+
+    print("✅ SYNCHRO TERMINÉE\n")
+
+
+# === BOUCLE AUTO EN ARRIÈRE-PLAN ===
+def auto_sync_loop():
     while True:
         try:
-            dreamlove_stock = fetch_dreamlove_stock()
-            products = fetch_manual_products()
-            location_id = get_location_id()
-
-            for product in products:
-                for variant in product["variants"]:
-                    sku = variant.get("sku")
-
-                    if sku in dreamlove_stock:
-                        new_stock = dreamlove_stock[sku]
-                        inventory_item_id = variant["inventory_item_id"]
-
-                        print(f"🔁 {sku} → {new_stock}")
-                        update_stock(inventory_item_id, new_stock, location_id)
-
+            sync()
         except Exception as e:
             print("❌ ERREUR GLOBALE :", str(e))
 
-        print(f"⏳ Attente {INTERVAL} secondes...\n")
+        print(f"⏳ Prochaine synchro dans {INTERVAL} secondes...\n")
         time.sleep(INTERVAL)
 
 
-# -------------------------------
-# LANCEMENT PARALLÈLE
-# -------------------------------
-threading.Thread(target=sync_loop, daemon=True).start()
-app.run(host="0.0.0.0", port=PORT)
+# === FLASK POUR GARDER RAILWAY ACTIF ===
+@app.route("/")
+def home():
+    return "Stock sync actif ✅"
+
+
+# === LANCEMENT PROPRE ===
+if __name__ == "__main__":
+    thread = threading.Thread(target=auto_sync_loop)
+    thread.daemon = True
+    thread.start()
+
+    app.run(host="0.0.0.0", port=8080)
