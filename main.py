@@ -16,15 +16,17 @@ HEADERS = {
 
 def fetch_dreamlove_stock():
     print("🔄 Téléchargement du stock Dreamlove...")
-    r = requests.get(CSV_URL)
+    r = requests.get(CSV_URL, timeout=60)
     r.encoding = "utf-8"
     lines = r.text.splitlines()
     reader = csv.DictReader(lines)
 
     stock_map = {}
+
     for row in reader:
         sku = row.get("sku") or row.get("SKU")
         qty = row.get("stock") or row.get("quantity") or row.get("qty")
+
         if sku and qty:
             try:
                 stock_map[sku.strip()] = int(float(qty))
@@ -36,7 +38,7 @@ def fetch_dreamlove_stock():
 
 
 def fetch_manual_products():
-    print("🔍 Récupération des produits TAG =", TAG)
+    print("🔍 Récupération des produits avec le tag :", TAG)
     products = []
     url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
 
@@ -50,12 +52,15 @@ def fetch_manual_products():
     return products
 
 
-def update_stock(variant_id, inventory_item_id, new_stock):
-    # 1. Récupérer location_id
-    r = requests.get(f"https://{SHOP}/admin/api/2024-07/locations.json", headers=HEADERS)
-    location_id = r.json()["locations"][0]["id"]
+def get_location_id():
+    r = requests.get(
+        f"https://{SHOP}/admin/api/2024-07/locations.json",
+        headers=HEADERS
+    )
+    return r.json()["locations"][0]["id"]
 
-    # 2. Mise à jour du stock
+
+def update_stock(inventory_item_id, new_stock, location_id):
     payload = {
         "location_id": location_id,
         "inventory_item_id": inventory_item_id,
@@ -75,20 +80,25 @@ def update_stock(variant_id, inventory_item_id, new_stock):
 
 
 def sync():
+    print("🚀 SYNCHRO STOCK MANUELLE DÉMARRÉE")
+
     dreamlove_stock = fetch_dreamlove_stock()
     products = fetch_manual_products()
+    location_id = get_location_id()
 
     for product in products:
         for variant in product["variants"]:
             sku = variant.get("sku")
+
             if sku in dreamlove_stock:
                 new_stock = dreamlove_stock[sku]
                 inventory_item_id = variant["inventory_item_id"]
+
                 print(f"🔁 {sku} → {new_stock}")
-                update_stock(variant["id"], inventory_item_id, new_stock)
+                update_stock(inventory_item_id, new_stock, location_id)
 
 
-print("🚀 SYNCHRO STOCK MANUELLE DÉMARRÉE")
+# ✅ BOUCLE ANTI-CRASH RAILWAY
 while True:
     try:
         sync()
