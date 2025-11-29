@@ -2,17 +2,33 @@ import os
 import time
 import csv
 import requests
+import threading
+from flask import Flask
 
+# -------------------------------
+# CONFIG
+# -------------------------------
 SHOP = os.getenv("SHOPIFY_SHOP")
 TOKEN = os.getenv("SHOPIFY_TOKEN")
 CSV_URL = os.getenv("DREAMLOVE_CSV_URL")
 TAG = os.getenv("PRODUCT_TAG")
 INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))
+PORT = int(os.getenv("PORT", "8080"))
 
 HEADERS = {
     "X-Shopify-Access-Token": TOKEN,
     "Content-Type": "application/json"
 }
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "✅ Adopt1Toy Stock Sync is running"
+
+# -------------------------------
+# FONCTIONS
+# -------------------------------
 
 def fetch_dreamlove_stock():
     print("🔄 Téléchargement du stock Dreamlove...")
@@ -79,31 +95,35 @@ def update_stock(inventory_item_id, new_stock, location_id):
         print("❌ Erreur mise à jour stock :", r.text)
 
 
-def sync():
+def sync_loop():
     print("🚀 SYNCHRO STOCK MANUELLE DÉMARRÉE")
 
-    dreamlove_stock = fetch_dreamlove_stock()
-    products = fetch_manual_products()
-    location_id = get_location_id()
+    while True:
+        try:
+            dreamlove_stock = fetch_dreamlove_stock()
+            products = fetch_manual_products()
+            location_id = get_location_id()
 
-    for product in products:
-        for variant in product["variants"]:
-            sku = variant.get("sku")
+            for product in products:
+                for variant in product["variants"]:
+                    sku = variant.get("sku")
 
-            if sku in dreamlove_stock:
-                new_stock = dreamlove_stock[sku]
-                inventory_item_id = variant["inventory_item_id"]
+                    if sku in dreamlove_stock:
+                        new_stock = dreamlove_stock[sku]
+                        inventory_item_id = variant["inventory_item_id"]
 
-                print(f"🔁 {sku} → {new_stock}")
-                update_stock(inventory_item_id, new_stock, location_id)
+                        print(f"🔁 {sku} → {new_stock}")
+                        update_stock(inventory_item_id, new_stock, location_id)
+
+        except Exception as e:
+            print("❌ ERREUR GLOBALE :", str(e))
+
+        print(f"⏳ Attente {INTERVAL} secondes...\n")
+        time.sleep(INTERVAL)
 
 
-# ✅ BOUCLE ANTI-CRASH RAILWAY
-while True:
-    try:
-        sync()
-    except Exception as e:
-        print("❌ ERREUR GLOBALE :", str(e))
-
-    print(f"⏳ Attente {INTERVAL} secondes...\n")
-    time.sleep(INTERVAL)
+# -------------------------------
+# LANCEMENT PARALLÈLE
+# -------------------------------
+threading.Thread(target=sync_loop, daemon=True).start()
+app.run(host="0.0.0.0", port=PORT)
