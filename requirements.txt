@@ -1,4 +1,3 @@
 requests
 pandas
 python-dotenv
-flask
