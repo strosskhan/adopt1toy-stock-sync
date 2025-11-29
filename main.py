@@ -1,10 +1,7 @@
 import os
 import csv
 import requests
-
-# ==============================
-# VARIABLES D’ENVIRONNEMENT
-# ==============================
+import sys
 
 SHOP = os.getenv("SHOPIFY_SHOP")
 TOKEN = os.getenv("SHOPIFY_TOKEN")
@@ -16,17 +13,14 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-# ==============================
-# RÉCUPÉRATION STOCK DREAMLOVE
-# ==============================
-
 def fetch_dreamlove_stock():
     print("📥 Téléchargement du stock Dreamlove...")
 
     r = requests.get(CSV_URL, timeout=30)
+    r.raise_for_status()
+
     r.encoding = "utf-8"
-    lines = r.text.splitlines()
-    reader = csv.DictReader(lines)
+    reader = csv.DictReader(r.text.splitlines())
 
     stock_map = {}
 
@@ -38,34 +32,29 @@ def fetch_dreamlove_stock():
             try:
                 stock_map[sku.strip()] = int(float(qty))
             except:
-                pass
+                print("⚠️ Stock invalide:", sku, qty)
 
-    print(f"✅ {len(stock_map)} SKU trouvés dans Dreamlove")
+    print(f"✅ {len(stock_map)} SKU trouvés")
     return stock_map
 
-# ==============================
-# RÉCUPÉRATION PRODUITS MANUELS
-# ==============================
 
 def fetch_manual_products():
-    print(f"🔍 Recherche des produits avec le tag : {TAG}")
+    print(f"🔍 Produits avec le tag : {TAG}")
 
     products = []
     url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
 
     while url:
         r = requests.get(url, headers=HEADERS, timeout=30)
-        data = r.json()
+        r.raise_for_status()
 
+        data = r.json()
         products.extend(data.get("products", []))
         url = r.links.get("next", {}).get("url")
 
-    print(f"✅ {len(products)} produits manuels trouvés")
+    print(f"✅ {len(products)} produits trouvés")
     return products
 
-# ==============================
-# MISE À JOUR DU STOCK SHOPIFY
-# ==============================
 
 def update_stock(inventory_item_id, new_stock):
     r = requests.get(
@@ -73,6 +62,7 @@ def update_stock(inventory_item_id, new_stock):
         headers=HEADERS,
         timeout=30
     )
+    r.raise_for_status()
 
     location_id = r.json()["locations"][0]["id"]
 
@@ -92,17 +82,14 @@ def update_stock(inventory_item_id, new_stock):
     if r.status_code == 200:
         print(f"✅ Stock mis à jour → {new_stock}")
     else:
-        print("❌ Erreur mise à jour stock :", r.text)
+        print("❌ Erreur Shopify :", r.text)
 
-# ==============================
-# SYNCHRO GLOBALE
-# ==============================
 
 def sync():
     dreamlove_stock = fetch_dreamlove_stock()
     products = fetch_manual_products()
 
-    total_updates = 0
+    total = 0
 
     for product in products:
         for variant in product["variants"]:
@@ -117,20 +104,22 @@ def sync():
 
                 print(f"🔁 {sku} → {new_stock}")
                 update_stock(inventory_item_id, new_stock)
-                total_updates += 1
+                total += 1
 
-    print(f"✅ {total_updates} variantes mises à jour")
+    print(f"✅ {total} variantes mises à jour")
 
-# ==============================
-# LANCEMENT UNIQUE (CRON)
-# ==============================
+
+# ============================
+# LANCEMENT CRON UNIQUE
+# ============================
 
 print("🟢 SERVICE STOCK MANUEL ACTIF")
 print("🚀 LANCEMENT SYNCHRO")
 
 try:
     sync()
+    print("✅ SYNCHRO TERMINÉE AVEC SUCCÈS")
+    sys.exit(0)
 except Exception as e:
-    print("❌ ERREUR GLOBALE :", str(e))
-
-print("✅ SYNCHRO TERMINÉE — FIN DU JOB")
+    print("❌ ERREUR FATALE :", str(e))
+    sys.exit(1)
