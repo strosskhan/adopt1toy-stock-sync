@@ -1,7 +1,6 @@
 import os
 import csv
 import requests
-import time
 from tqdm import tqdm
 from datetime import datetime
 
@@ -95,12 +94,11 @@ def fetch_adopt1toy_location_id():
     return None
 
 # =========================
-# 4. CONNEXION + MISE À JOUR DU STOCK (CORRECTION DÉFINITIVE)
+# 4. CONNEXION + MAJ STOCK
 # =========================
 
 def update_stock(location_id, inventory_item_id, new_stock):
 
-    # 1. CONNECTER L'INVENTORY ITEM À L'EMPLACEMENT
     connect_payload = {
         "location_id": location_id,
         "inventory_item_id": inventory_item_id
@@ -112,7 +110,6 @@ def update_stock(location_id, inventory_item_id, new_stock):
         json=connect_payload
     )
 
-    # 2. METTRE À JOUR LE STOCK
     payload = {
         "location_id": location_id,
         "inventory_item_id": inventory_item_id,
@@ -183,12 +180,14 @@ def sync():
 
     print(f"\n✅ {match_count} variantes synchronisées")
     print(f"📁 Log enregistré : {LOG_FILE}\n")
-    if __name__ == "__main__":
+
+# =========================
+# 6. LANCEMENT CRON (ONE-SHOT)
+# =========================
+
+if __name__ == "__main__":
     try:
         sync()
         print("✅ SYNCHRONISATION TERMINÉE")
     except Exception as e:
         print("❌ ERREUR GLOBALE :", str(e))
-
-
-
