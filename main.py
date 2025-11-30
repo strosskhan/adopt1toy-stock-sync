@@ -183,5 +183,12 @@ def sync():
 
     print(f"\n✅ {match_count} variantes synchronisées")
     print(f"📁 Log enregistré : {LOG_FILE}\n")
+    if __name__ == "__main__":
+    try:
+        sync()
+        print("✅ SYNCHRONISATION TERMINÉE")
+    except Exception as e:
+        print("❌ ERREUR GLOBALE :", str(e))
+
 
 
