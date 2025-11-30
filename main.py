@@ -1,6 +1,7 @@
 import os
 import csv
 import requests
+import time
 from tqdm import tqdm
 from datetime import datetime
 
@@ -26,7 +27,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 print("🟢 SERVICE STOCK ADOPT1TOY ACTIF")
 print("🚀 LANCEMENT SYNCHRO\n")
-
 
 # =========================
 # 1. RÉCUPÉRATION STOCK DREAMLOVE
@@ -55,7 +55,6 @@ def fetch_dreamlove_stock():
     print(f"✅ {len(stock_map)} SKU chargés depuis Dreamlove\n")
     return stock_map
 
-
 # =========================
 # 2. RÉCUPÉRATION PRODUITS SHOPIFY (TAG MANUEL)
 # =========================
@@ -75,9 +74,8 @@ def fetch_manual_products():
     print(f"✅ {len(products)} produits détectés dans Shopify\n")
     return products
 
-
 # =========================
-# 3. RÉCUPÉRATION DE L’EMPLACEMENT ADOPT1TOY
+# 3. RÉCUPÉRATION EMPLACEMENT ADOPT1TOY
 # =========================
 
 def fetch_adopt1toy_location_id():
@@ -96,9 +94,8 @@ def fetch_adopt1toy_location_id():
     print("❌ ERREUR : emplacement 'Adopt1toy' introuvable")
     return None
 
-
 # =========================
-# 4. MISE À JOUR DU STOCK SUR ADOPT1TOY
+# 4. MISE À JOUR DU STOCK
 # =========================
 
 def update_stock(location_id, inventory_item_id, new_stock):
@@ -116,9 +113,8 @@ def update_stock(location_id, inventory_item_id, new_stock):
 
     return r.status_code == 200, r.text
 
-
 # =========================
-# 5. SYNCHRONISATION GLOBALE
+# 5. SYNCHRONISATION
 # =========================
 
 def sync():
@@ -149,27 +145,41 @@ def sync():
                     inventory_item_id,
                     new_stock,
                     "OK" if success else "ERREUR",
-                    response[:200]
+                    response[:200],
+                    datetime.now().isoformat()
                 ])
 
                 if success:
+                    print(f"✅ {sku} → {new_stock} (Adopt1toy)")
                     match_count += 1
+                else:
+                    print(f"❌ {sku} → ERREUR")
 
     with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f, delimiter=";")
-        writer.writerow(["SKU", "Inventory Item ID", "Stock", "Résultat", "Message"])
+        writer.writerow([
+            "SKU",
+            "Inventory Item ID",
+            "Stock",
+            "Résultat",
+            "Message",
+            "Date"
+        ])
         writer.writerows(logs)
 
     print(f"\n✅ {match_count} variantes synchronisées")
-    print(f"📁 Log enregistré : {LOG_FILE}")
-
+    print(f"📁 Log enregistré : {LOG_FILE}\n")
 
 # =========================
-# 6. LANCEMENT
+# 6. BOUCLE INFINIE (RAILWAY SAFE)
 # =========================
 
-try:
-    sync()
-    print("\n✅ SYNCHRONISATION TERMINÉE")
-except Exception as e:
-    print("\n❌ ERREUR GLOBALE :", str(e))
+if __name__ == "__main__":
+    while True:
+        try:
+            sync()
+            print("⏳ Attente 5 minutes avant la prochaine synchronisation...\n")
+        except Exception as e:
+            print("❌ ERREUR DANS LA BOUCLE :", str(e))
+
+        time.sleep(300)
