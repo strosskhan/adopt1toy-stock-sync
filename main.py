@@ -184,16 +184,4 @@ def sync():
     print(f"\n✅ {match_count} variantes synchronisées")
     print(f"📁 Log enregistré : {LOG_FILE}\n")
 
-# =========================
-# 6. BOUCLE INFINIE (RAILWAY SAFE – 5 MIN)
-# =========================
 
-if __name__ == "__main__":
-    while True:
-        try:
-            sync()
-            print("⏳ Attente 5 minutes avant la prochaine synchronisation...\n")
-        except Exception as e:
-            print("❌ ERREUR DANS LA BOUCLE :", str(e))
-
-        time.sleep(300)
