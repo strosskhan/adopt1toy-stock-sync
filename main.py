@@ -1,44 +1,34 @@
 import os
 import csv
 import requests
-from tqdm import tqdm
-from datetime import datetime
 
 # =========================
-# CONFIG
+# VARIABLES RAILWAY
 # =========================
 
 SHOP = os.getenv("SHOPIFY_SHOP")
 TOKEN = os.getenv("SHOPIFY_TOKEN")
-TAG = os.getenv("PRODUCT_TAG", "Manuel")
-
-CSV_URL = "https://store.dreamlove.es/dyndata/exportaciones/csvzip/catalog_1_52_125_2_dd65d46c9efc3d9364272c55399d5b56_csv_plain.csv"
-
-OUTPUT_DIR = "output"
-LOG_FILE = os.path.join(OUTPUT_DIR, "sync_log.csv")
+TAG = os.getenv("PRODUCT_TAG")
+CSV_URL = os.getenv("DREAMLOVE_CSV_URL")
 
 HEADERS = {
     "X-Shopify-Access-Token": TOKEN,
     "Content-Type": "application/json"
 }
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
 print("🟢 SERVICE STOCK ADOPT1TOY ACTIF")
-print("🚀 LANCEMENT SYNCHRO\n")
+print("🚀 LANCEMENT SYNCHRO")
 
 # =========================
-# 1. RÉCUPÉRATION STOCK DREAMLOVE
+# 1. LECTURE CSV DREAMLOVE (sku + available_stock)
 # =========================
 
 def fetch_dreamlove_stock():
-    print("🔄 Téléchargement du stock Dreamlove...")
-    r = requests.get(CSV_URL, timeout=90)
+    print("📥 Téléchargement du stock Dreamlove...")
+    r = requests.get(CSV_URL, timeout=120)
     r.encoding = "utf-8"
 
-    lines = r.text.splitlines()
-    reader = csv.DictReader(lines, delimiter=";")
-
+    reader = csv.DictReader(r.text.splitlines(), delimiter=";")
     stock_map = {}
 
     for row in reader:
@@ -51,17 +41,16 @@ def fetch_dreamlove_stock():
             except:
                 pass
 
-    print(f"✅ {len(stock_map)} SKU chargés depuis Dreamlove\n")
+    print(f"✅ {len(stock_map)} SKU chargés depuis Dreamlove")
     return stock_map
 
 # =========================
-# 2. RÉCUPÉRATION PRODUITS SHOPIFY (TAG MANUEL)
+# 2. PRODUITS SHOPIFY AVEC TAG MANUEL
 # =========================
 
-def fetch_manual_products():
-    print("🔍 Récupération des produits avec le TAG :", TAG)
+def fetch_shopify_products():
+    print("🔍 Récupération des produits Shopify avec le tag :", TAG)
     products = []
-
     url = f"https://{SHOP}/admin/api/2024-07/products.json?limit=250&tag={TAG}"
 
     while url:
@@ -70,59 +59,50 @@ def fetch_manual_products():
         products.extend(data.get("products", []))
         url = r.links.get("next", {}).get("url")
 
-    print(f"✅ {len(products)} produits détectés dans Shopify\n")
+    print(f"✅ {len(products)} produits Shopify récupérés")
     return products
 
 # =========================
-# 3. RÉCUPÉRATION EMPLACEMENT ADOPT1TOY
+# 3. ID DE L’EMPLACEMENT ADOPT1TOY
 # =========================
 
 def fetch_adopt1toy_location_id():
-    r = requests.get(
-        f"https://{SHOP}/admin/api/2024-07/locations.json",
-        headers=HEADERS
-    )
-
+    r = requests.get(f"https://{SHOP}/admin/api/2024-07/locations.json", headers=HEADERS)
     locations = r.json()["locations"]
 
     for loc in locations:
         if loc["name"].lower() == "adopt1toy":
-            print(f"✅ Emplacement trouvé : Adopt1toy (ID {loc['id']})\n")
+            print(f"✅ Emplacement Adopt1toy trouvé (ID {loc['id']})")
             return loc["id"]
 
-    print("❌ ERREUR : emplacement 'Adopt1toy' introuvable")
+    print("❌ ERREUR : emplacement Adopt1toy introuvable")
     return None
 
 # =========================
-# 4. CONNEXION + MAJ STOCK
+# 4. CONNEXION + MISE À JOUR STOCK
 # =========================
 
 def update_stock(location_id, inventory_item_id, new_stock):
-
-    connect_payload = {
-        "location_id": location_id,
-        "inventory_item_id": inventory_item_id
-    }
-
     requests.post(
         f"https://{SHOP}/admin/api/2024-07/inventory_levels/connect.json",
         headers=HEADERS,
-        json=connect_payload
+        json={
+            "location_id": location_id,
+            "inventory_item_id": inventory_item_id
+        }
     )
-
-    payload = {
-        "location_id": location_id,
-        "inventory_item_id": inventory_item_id,
-        "available": new_stock
-    }
 
     r = requests.post(
         f"https://{SHOP}/admin/api/2024-07/inventory_levels/set.json",
         headers=HEADERS,
-        json=payload
+        json={
+            "location_id": location_id,
+            "inventory_item_id": inventory_item_id,
+            "available": new_stock
+        }
     )
 
-    return r.status_code == 200, r.text
+    return r.status_code == 200
 
 # =========================
 # 5. SYNCHRONISATION
@@ -130,64 +110,42 @@ def update_stock(location_id, inventory_item_id, new_stock):
 
 def sync():
     dreamlove_stock = fetch_dreamlove_stock()
-    products = fetch_manual_products()
+    products = fetch_shopify_products()
     location_id = fetch_adopt1toy_location_id()
 
     if not location_id:
         return
 
-    logs = []
-    match_count = 0
+    updated = 0
 
-    print("🔁 Synchronisation en cours...\n")
+    print("🔁 Comparaison et mise à jour...")
 
-    for product in tqdm(products, desc="Produits"):
+    for product in products:
         for variant in product["variants"]:
             sku = variant.get("sku")
+            inv_id = variant.get("inventory_item_id")
+            shopify_qty = variant.get("inventory_quantity")
 
             if sku in dreamlove_stock:
-                new_stock = dreamlove_stock[sku]
-                inventory_item_id = variant["inventory_item_id"]
+                dl_qty = dreamlove_stock[sku]
 
-                success, response = update_stock(location_id, inventory_item_id, new_stock)
+                if shopify_qty != dl_qty:
+                    ok = update_stock(location_id, inv_id, dl_qty)
 
-                logs.append([
-                    sku,
-                    inventory_item_id,
-                    new_stock,
-                    "OK" if success else "ERREUR",
-                    response[:200],
-                    datetime.now().isoformat()
-                ])
+                    if ok:
+                        print(f"✅ {sku} : {shopify_qty} → {dl_qty}")
+                        updated += 1
+                    else:
+                        print(f"❌ ERREUR MAJ {sku}")
 
-                if success:
-                    print(f"✅ {sku} → {new_stock} (Adopt1toy)")
-                    match_count += 1
-                else:
-                    print(f"❌ {sku} → ERREUR")
-
-    with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f, delimiter=";")
-        writer.writerow([
-            "SKU",
-            "Inventory Item ID",
-            "Stock",
-            "Résultat",
-            "Message",
-            "Date"
-        ])
-        writer.writerows(logs)
-
-    print(f"\n✅ {match_count} variantes synchronisées")
-    print(f"📁 Log enregistré : {LOG_FILE}\n")
+    print(f"✅ SYNCHRO TERMINÉE — {updated} variantes mises à jour")
 
 # =========================
-# 6. LANCEMENT CRON (ONE-SHOT)
+# 6. LANCEMENT CRON (ONE SHOT)
 # =========================
 
 if __name__ == "__main__":
     try:
         sync()
-        print("✅ SYNCHRONISATION TERMINÉE")
     except Exception as e:
         print("❌ ERREUR GLOBALE :", str(e))
