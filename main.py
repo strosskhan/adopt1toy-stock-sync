@@ -95,10 +95,24 @@ def fetch_adopt1toy_location_id():
     return None
 
 # =========================
-# 4. MISE À JOUR DU STOCK
+# 4. CONNEXION + MISE À JOUR DU STOCK (CORRECTION DÉFINITIVE)
 # =========================
 
 def update_stock(location_id, inventory_item_id, new_stock):
+
+    # 1. CONNECTER L'INVENTORY ITEM À L'EMPLACEMENT
+    connect_payload = {
+        "location_id": location_id,
+        "inventory_item_id": inventory_item_id
+    }
+
+    requests.post(
+        f"https://{SHOP}/admin/api/2024-07/inventory_levels/connect.json",
+        headers=HEADERS,
+        json=connect_payload
+    )
+
+    # 2. METTRE À JOUR LE STOCK
     payload = {
         "location_id": location_id,
         "inventory_item_id": inventory_item_id,
@@ -171,7 +185,7 @@ def sync():
     print(f"📁 Log enregistré : {LOG_FILE}\n")
 
 # =========================
-# 6. BOUCLE INFINIE (RAILWAY SAFE)
+# 6. BOUCLE INFINIE (RAILWAY SAFE – 5 MIN)
 # =========================
 
 if __name__ == "__main__":
